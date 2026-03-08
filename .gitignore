@@ -1,0 +1,6 @@
+# Logs and reports
+mac_repair_logs/
+*.log
+
+# System files
+.DS_Store
