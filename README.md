@@ -4,6 +4,8 @@ All-in-one macOS diagnostic, repair, and optimization toolkit — built for **Ap
 
 Designed and tested on a **Macbook Apple Silicons**, but works on any modern Mac running macOS Tahoe (14).
 
+![main.png](images/main.png)
+
 ---
 
 ## Quick Start
@@ -88,6 +90,8 @@ sudo ./run.sh --skip-xcode
 # Combine flags
 sudo ./run.sh --dry-run --skip-brew
 ```
+> Please check all Phase's Outputs one by one. 
+> These scripts take some time to run (about 3-5 minutes). Disks can stuck while these scripts running please don't do anything while scripts running.
 
 ### Run Individual Scripts
 
@@ -118,6 +122,9 @@ Every run generates timestamped logs and a Markdown report on your **Desktop**:
 ├── mac_fix_v2_20260309_021254.log          # Phase 2 raw log
 └── mac_fix_v3_20260309_021607.log          # Phase 3 raw log
 ```
+![result-example.png](images/result-example.png)
+
+> Please check all Phase's Outputs one by one. 
 
 ---
 
