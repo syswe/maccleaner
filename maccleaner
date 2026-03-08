@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  🍎  MacCleaner (Portable Bundle)
+#  All-in-One macOS Diagnostic, Repair, and Deep Optimization
+# =============================================================================
+#  Target : macOS 13+ (Ventura, Sonoma, Sequoia) · Apple Silicon & Intel
+#  Docs   : https://github.com/syswe/maccleaner
+# =============================================================================
+#  Usage:
+#    sudo ./maccleaner              # Full 3-phase optimization
+#    sudo ./maccleaner --dry-run    # Preview only
+#    sudo ./maccleaner --phase 1    # Run only diagnostics
+# =============================================================================
+
+set -u
+IFS=$'\n\t'
+
+# ── Version ──────────────────────────────────────────────────────────────────
+VERSION="1.0.0-portable"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+LOG_DIR="$HOME/Desktop/mac_repair_logs"
+LOG_FILE="$LOG_DIR/maccleaner_${TIMESTAMP}.log"
+REPORT_FILE="$LOG_DIR/maccleaner_report_${TIMESTAMP}.md"
+
+# ── CLI Flags ─────────────────────────────────────────────────────────────────
+DRY_RUN=false
+SKIP_BREW=false
+SKIP_XCODE=false
+START_PHASE=1
+END_PHASE=3
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)    DRY_RUN=true ;;
+    --skip-brew)  SKIP_BREW=true ;;
+    --skip-xcode) SKIP_XCODE=true ;;
+    --phase=*)    START_PHASE="${arg#*=}"; END_PHASE="${arg#*=}" ;;
+    -h|--help)
+      echo "Usage: sudo ./maccleaner [--dry-run] [--skip-brew] [--skip-xcode] [--phase=1|2|3]"
+      exit 0 ;;
+  esac
+done
+
+# ── Initialize ────────────────────────────────────────────────────────────────
+mkdir -p "$LOG_DIR"
+
+if [[ -t 1 ]]; then
+  RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+  CYAN='\033[0;36m';  BOLD='\033[1m';   RESET='\033[0m'
+  BLUE='\033[0;34m'; MAGENTA='\033[0;35m'; WHITE='\033[1;37m'
+else
+  RED=''; YELLOW=''; GREEN=''; CYAN=''; BOLD=''; RESET=''; BLUE=''; MAGENTA=''; WHITE=''
+fi
+
+TOTAL_ISSUES=0; TOTAL_FIXED=0; TOTAL_WARNINGS=0
+REPORT_LINES=()
+
+# =============================================================================
+# CORE HELPERS
+# =============================================================================
+
+log_raw() { echo -e "$*" | tee -a "$LOG_FILE"; }
+
+header() {
+  local title="$1" type="${2:-⬡}"
+  local bar; bar=$(printf '═%.0s' {1..70})
+  log_raw ""
+  log_raw "${BOLD}${CYAN}╔${bar}╗${RESET}"
+  log_raw "${BOLD}${CYAN}║  $type  ${title}$(printf '%*s' $((62 - ${#title})) '')║${RESET}"
+  log_raw "${BOLD}${CYAN}╚${bar}╝${RESET}"
+  [[ "$type" == "⬡" ]] && REPORT_LINES+=("## $title")
+}
+
+section() { log_raw "${BOLD}${BLUE}▸ $*${RESET}"; REPORT_LINES+=("### $*"); }
+ok()      { log_raw "  ${GREEN}✔${RESET}  $*"; REPORT_LINES+=("- ✅ $*"); }
+warn()    { log_raw "  ${YELLOW}⚠${RESET}  $*"; REPORT_LINES+=("- ⚠️  $*"); ((TOTAL_WARNINGS++)) || true; }
+err()     { log_raw "  ${RED}✖${RESET}  $*"; REPORT_LINES+=("- ❌ $*"); ((TOTAL_ISSUES++)) || true; }
+info()    { log_raw "  ${MAGENTA}ℹ${RESET}  $*"; REPORT_LINES+=("- ℹ️  $*"); }
+skip()    { log_raw "  ${WHITE}↷${RESET}  SKIP: $*"; }
+fixed()   { log_raw "  ${GREEN}⟳${RESET}  ${GREEN}FIXED:${RESET} $*"; REPORT_LINES+=("- 🔧 FIXED: $*"); ((TOTAL_FIXED++)) || true; }
+
+need_sudo() {
+  if [[ $EUID -ne 0 ]]; then
+    warn "Root required for: $* — re-run with sudo"
+    return 1
+  fi
+  return 0
+}
+
+run_fix() {
+  local desc="$1"; shift
+  if $DRY_RUN; then skip "[DRY-RUN] Would run: $*"
+  else
+    if "$@" >> "$LOG_FILE" 2>&1; then fixed "$desc"
+    else warn "Fix failed: $desc"; fi
+  fi
+}
+
+# =============================================================================
+# PHASE 1 — DIAGNOSTICS & SAFE REPAIR (Logic from mac_repair.sh)
+# =============================================================================
+
+p1_module_system() {
+  header "PHASE 1 · System Information"
+  local macos chip ram model
+  macos="$(sw_vers -productName) $(sw_vers -productVersion)"
+  chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown")
+  ram=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
+  info "macOS  : $macos"
+  info "Chip   : $chip"
+  info "RAM    : ${ram} GB"
+
+  # SIP Check
+  if csrutil status | grep -q "enabled"; then ok "SIP: Enabled"
+  else err "SIP: DISABLED"; fi
+
+  # FileVault Check
+  if fdesetup status | grep -q "On"; then ok "FileVault: Enabled"
+  else warn "FileVault: Disabled"; fi
+}
+
+p1_module_disk() {
+  header "PHASE 1 · Disk Health"
+  local usage; usage=$(df -H / | tail -1 | awk '{print $5}' | tr -d '%')
+  info "Disk usage: ${usage}%"
+  if (( usage > 90 )); then err "Disk critically full"; elif (( usage > 80 )); then warn "Disk usage high"; fi
+
+  # SMART
+  local smart; smart=$(diskutil info / 2>/dev/null | awk '/SMART Status/{print $NF}')
+  if [[ "$smart" == "Verified" ]]; then ok "SMART Status: Verified"; else err "SMART Status: $smart"; fi
+}
+
+p1_module_security() {
+  header "PHASE 1 · Security Audit"
+  if spctl --status | grep -q "enabled"; then ok "Gatekeeper: Enabled"; else err "Gatekeeper: Disabled"; fi
+  
+  # SSH permissions
+  if [[ -d "$HOME/.ssh" ]] && [[ "$(stat -f '%OLp' "$HOME/.ssh")" != "700" ]]; then
+    err "SSH directory has unsafe permissions"
+    run_fix "Fix SSH permissions" chmod 700 "$HOME/.ssh"
+  fi
+}
+
+p1_module_logs() {
+  header "PHASE 1 · Log Analysis"
+  local panics; panics=$(find /Library/Logs/DiagnosticReports -name "*.panic" 2>/dev/null | wc -l | tr -d ' ')
+  if (( panics > 0 )); then err "Found $panics kernel panics"; else ok "No kernel panics found"; fi
+}
+
+# =============================================================================
+# PHASE 2 — AGGRESSIVE CLEANUP (Logic from mac_fix_v2.sh)
+# =============================================================================
+
+p2_target_trash() {
+  header "PHASE 2 · Trash Cleanup" "⚡"
+  local trash_dir="$HOME/.Trash"
+  if [[ -d "$trash_dir" ]]; then
+    local sz; sz=$(du -sh "$trash_dir" 2>/dev/null | cut -f1)
+    info "Trash contains: $sz"
+    run_fix "Empty Trash" rm -rf "${trash_dir:?}/"*
+  fi
+}
+
+p2_target_xattr() {
+  header "PHASE 2 · Extended Attribute Stripping" "⚡"
+  info "Clearing quarantine and download tracking tags..."
+  if ! $DRY_RUN; then
+    find "$HOME/Downloads" -type f -print0 2>/dev/null | xargs -0 xattr -c 2>/dev/null || true
+    fixed "Pruned xattr in Downloads"
+  else skip "[DRY-RUN] Purge xattr metadata"; fi
+}
+
+p2_target_network() {
+  header "PHASE 2 · Network & DNS Reset" "⚡"
+  run_fix "Flush DNS Cache" dscacheutil -flushcache
+  run_fix "Restart mDNSResponder" killall -HUP mDNSResponder
+}
+
+# =============================================================================
+# PHASE 3 — DEEP REMEDIATION (Logic from mac_fix_v3.sh)
+# =============================================================================
+
+p3_target_xcode() {
+  header "PHASE 3 · Xcode Dev Cleanup" "🔧"
+  $SKIP_XCODE && return
+  local dd="$HOME/Library/Developer/Xcode/DerivedData"
+  if [[ -d "$dd" ]]; then
+    local sz; sz=$(du -sh "$dd" 2>/dev/null | cut -f1)
+    run_fix "Clear Xcode DerivedData ($sz)" rm -rf "$dd"
+  fi
+}
+
+p3_target_brew() {
+  header "PHASE 3 · Homebrew Maintenance" "🔧"
+  $SKIP_BREW && return
+  if command -v brew &>/dev/null; then
+    run_fix "Brew Update" brew update
+    run_fix "Brew Cleanup" brew cleanup
+  fi
+}
+
+p3_target_caches() {
+  header "PHASE 3 · Deep Cache Pruning" "🔧"
+  local cache_dir="$HOME/Library/Caches"
+  local SAFE_CACHE=( "com.apple.Safari" "com.apple.WebKit" "CloudKit" "com.apple.dt.Xcode" )
+  for c in "${SAFE_CACHE[@]}"; do
+    [[ -d "$cache_dir/$c" ]] && run_fix "Clear cache: $c" rm -rf "$cache_dir/$c"
+  done
+}
+
+# =============================================================================
+# ENGINE
+# =============================================================================
+
+write_report() {
+  {
+    echo "# MacCleaner Portable Report"
+    echo "Generated: $(date)"
+    echo "Files fixed: $TOTAL_FIXED | Warnings: $TOTAL_WARNINGS | Issues: $TOTAL_ISSUES"
+    echo ""
+    for line in "${REPORT_LINES[@]}"; do echo "$line"; done
+  } > "$REPORT_FILE"
+}
+
+main() {
+  clear
+  echo -e "${BOLD}${CYAN}"
+  echo "  ╔══════════════════════════════════════════════════════════╗"
+  echo "  ║          🍎  MacCleaner Portable Bundle                   ║"
+  echo "  ║    One file. 3 Phases. Complete Optimization.            ║"
+  echo "  ╚══════════════════════════════════════════════════════════╝"
+  echo -e "${RESET}"
+
+  need_sudo "MacCleaner" || exit 1
+
+  # PHASE 1
+  if (( START_PHASE <= 1 && END_PHASE >= 1 )); then
+    p1_module_system
+    p1_module_disk
+    p1_module_security
+    p1_module_logs
+  fi
+
+  # PHASE 2
+  if (( START_PHASE <= 2 && END_PHASE >= 2 )); then
+    p2_target_trash
+    p2_target_xattr
+    p2_target_network
+  fi
+
+  # PHASE 3
+  if (( START_PHASE <= 3 && END_PHASE >= 3 )); then
+    p3_target_xcode
+    p3_target_brew
+    p3_target_caches
+  fi
+
+  write_report
+  echo -e "\n${GREEN}${BOLD}✅ MacCleaner finished!${RESET}"
+  echo -e "Report: $REPORT_FILE\n"
+}
+
+main "$@"
