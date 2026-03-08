@@ -2,7 +2,7 @@
 
 All-in-one macOS diagnostic, repair, and optimization toolkit — built for **Apple Silicon** Macs.
 
-Designed and tested on a **Macbook Apple Silicons**, but works on any modern Mac running macOS Tahoe (14).
+Designed and tested on a **Macbook Apple Silicons**, but works on any modern Mac running macOS Tahoe (26).
 
 ![main.png](images/main.png)
 
@@ -90,8 +90,9 @@ sudo ./run.sh --skip-xcode
 # Combine flags
 sudo ./run.sh --dry-run --skip-brew
 ```
-> Please check all Phase's Outputs one by one. 
-> These scripts take some time to run (about 3-5 minutes). Disks can stuck while these scripts running please don't do anything while scripts running.
+> These scripts take some time to run (about 3-5 minutes). 
+
+>Disks can stuck while these scripts running please don't do anything while scripts running.
 
 ### Run Individual Scripts
 
@@ -130,7 +131,7 @@ Every run generates timestamped logs and a Markdown report on your **Desktop**:
 
 ## Requirements
 
-- **macOS 14 (Tahoe - Latest)**
+- **macOS 26+ (Tahoe - Latest)**
 - **Apple Silicon** (M1/M2/M3/M4/M5)
 - `sudo` access for full functionality
 - Optional: `brew`, `npm`, `pip3` for package-specific cleanup
